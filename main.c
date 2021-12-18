@@ -20,18 +20,19 @@
 #define LED_C2 ~0xE000
 #define LED_C3 ~0xD000
 #define LED_C4 ~0xC200
-#define DELAY_TIME 2000
+#define DELAY_TIME 6000
 
 // SENSOR pins
 #define Trig 0x1000000
 #define Echo 0x2000000
 
-unsigned int compare = 0x200;
+unsigned int compare = 0x78;
 int measurement = 0;
 int waitForEcho = 1;
 long int result = 0;
 char resultS[4];
-int trig = 1;
+int trig = 0;
+int echo = 0;
 
 /* A delay function */
 void delay(long long bound) {
@@ -98,28 +99,6 @@ void setDigit(char digit) {
     setSegments(d);
 }
 
-void sensor(void) {
-    // send 10us pulse to Trig
-    PTA->PDOR |= Trig;
-    trig = 1;
-    LPTMR0_CSR &= ~LPTMR_CSR_TEN_MASK;
-    LPTMR0_CSR |= LPTMR_CSR_TEN_MASK;
-    while (trig);
-    PTA->PDOR &= ~Trig;
-
-    // wait for Echo signal
-    measurement = 0;
-    waitForEcho = 1;
-    while (waitForEcho) {
-    	measurement += 1;
-    }
-    result = round(measurement/29/2);
-    if (result < 0) result = 0;
-    if (result > 9999) result = 9999;
-    memset(resultS, 'x', 4);
-    sprintf(resultS,"%lu", result);
-}
-
 void PORTA_IRQHandler(void) {
     if (PORTA->ISFR & Echo) { // no input, interrupt detected
         if (!(GPIOA_PDIR & Echo)) {
@@ -129,40 +108,57 @@ void PORTA_IRQHandler(void) {
     }
 }
 
- void LPTMR0_IRQHandler(void)
- {
-     // Set new compare value set by up/down buttons
-     LPTMR0_CMR = compare/100;                // !! the CMR reg. may only be changed while TCF == 1
-     LPTMR0_CSR |=  LPTMR_CSR_TCF_MASK;   // writing 1 to TCF tclear the flag
-     trig = 0;
-
-
+ void PIT1_IRQHandler(void){
+		PTA->PDOR &= ~Trig;
+		trig = 0;
+		echo = 0;
+		PIT_TFLG1 |= 0x01;		// clear interrupt flag
+		PIT_TCTRL1 &= ~0x1;	// disable timer
  }
 
- void LPTMR0Init(int count)
- {
-     SIM_SCGC5 |= SIM_SCGC5_LPTIMER_MASK; // Enable clock to LPTMR
-     LPTMR0_CSR &= ~LPTMR_CSR_TEN_MASK;   // Turn OFF LPTMR to perform setup
-     LPTMR0_PSR = ( LPTMR_PSR_PRESCALE(0) // 0000 is div 2
-                  | LPTMR_PSR_PBYP_MASK   // LPO feeds directly to LPT
-                  | LPTMR_PSR_PCS(1)) ;   // use the choice of clock
-     LPTMR0_CMR = count;                  // Set compare value
-     LPTMR0_CSR =(  LPTMR_CSR_TCF_MASK    // Clear any pending interrupt (now)
-                  | LPTMR_CSR_TIE_MASK    // LPT interrupt enabled
-                 );
-     // enable interrupts
-     NVIC_EnableIRQ(LPTMR0_IRQn);
+ void PIT_enabler(void){
+ 	SIM->SCGC6 |= SIM_SCGC6_PIT_MASK;	// enable the PIT timer
+ 	PIT_TCTRL1 &= ~0x1;					// TEN disable
+ 	PIT->MCR &= ~0x2;					// disable standard timers
+ 	PIT_LDVAL1 = 0x1DF;	// 479 cycles = 10 us
+ 	PIT_TFLG1 =  0x1;					// clear interrupt flag
+ 	PIT_TCTRL1 |= 0x2;					// interrupt request
+ 	NVIC_EnableIRQ(PIT1_IRQn);			// enable interrupts from PIT1
+    PIT_TCTRL1 |=  0x1;	// enable timer
+ }
 
-     LPTMR0_CSR |= LPTMR_CSR_TEN_MASK;    // Turn ON LPTMR0 and start counting
+ void sensor(void) {
+     // send 10us pulse to Trig
+     PTA->PDOR |= Trig;
+     trig = 1;
+     PIT_enabler();
+     while (trig);
+     // PIT disables Trig signal after 10us
+     // wait for Echo signal
+     measurement = 0;
+     waitForEcho = 1;
+     while (waitForEcho) {
+    	 echo = 1;
+    	 PIT_enabler();
+    	 while (echo);
+    	 measurement += 10;
+
+     }
+     result = round(measurement/29/2);
+     if (result < 0) result = 0;
+     if (result > 9999) result = 9999;
+     memset(resultS, 'x', 4);
+     sprintf(resultS,"%lu", result);
  }
 
 int main(void) {
     MCUInit();
     PortsInit();
-    LPTMR0Init(compare);
+//    LPTMR0Init(compare);
 
     while (1) {
     	sensor();
+
     	setDigit(resultS[0]);
     	PTD->PDOR |= GPIO_PDOR_PDO(LED_C1);
     	delay(DELAY_TIME);
@@ -182,7 +178,7 @@ int main(void) {
     	PTD->PDOR |= GPIO_PDOR_PDO(LED_C4);
     	delay(DELAY_TIME);
     	PTD->PDOR &= GPIO_PDOR_PDO(~LED_C4);
-    	delay(350000);
+    	delay(2000);
     }
 
     return 0;
