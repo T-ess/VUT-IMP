@@ -31,7 +31,6 @@ int measurement = 0;
 int waitForEcho = 1;
 long int result = 0;
 char resultS[4];
-int trig = 1;
 
 /* A delay function */
 void delay(long long bound) {
@@ -44,6 +43,13 @@ void MCUInit(void) {
     MCG_C4 |= ( MCG_C4_DMX32_MASK | MCG_C4_DRST_DRS(0x01) );
     SIM_CLKDIV1 |= SIM_CLKDIV1_OUTDIV1(0x00);
     WDOG_STCTRLH &= ~WDOG_STCTRLH_WDOGEN_MASK;
+
+    SIM->COPC = SIM_COPC_COPT(0x00); // Deaktivace modulu WatchDog
+    // Aktivace hodin ridicich modulu portu A a B
+    SIM->SCGC5 |= SIM_SCGC5_PORTA_MASK | SIM_SCGC5_PORTB_MASK;
+	SIM->SOPT2 |= SIM_SOPT2_TPMSRC(0x01); // zdroj hodin do casovace TPM
+	SIM->SCGC5 |= SIM_SCGC5_PORTA_MASK; // povoleni hodin do portu B (pro RGB LED)
+	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK; // povoleni hodin do casovace TPM0
 }
 
 void PortsInit(void) {
@@ -101,10 +107,7 @@ void setDigit(char digit) {
 void sensor(void) {
     // send 10us pulse to Trig
     PTA->PDOR |= Trig;
-    trig = 1;
-    LPTMR0_CSR &= ~LPTMR_CSR_TEN_MASK;
-    LPTMR0_CSR |= LPTMR_CSR_TEN_MASK;
-    while (trig);
+    delay(30);
     PTA->PDOR &= ~Trig;
 
     // wait for Echo signal
@@ -113,7 +116,7 @@ void sensor(void) {
     while (waitForEcho) {
     	measurement += 1;
     }
-    result = round(measurement/29/2);
+    result = (measurement * 340) / 100 / 2;
     if (result < 0) result = 0;
     if (result > 9999) result = 9999;
     memset(resultS, 'x', 4);
@@ -134,9 +137,8 @@ void PORTA_IRQHandler(void) {
      // Set new compare value set by up/down buttons
      LPTMR0_CMR = compare/100;                // !! the CMR reg. may only be changed while TCF == 1
      LPTMR0_CSR |=  LPTMR_CSR_TCF_MASK;   // writing 1 to TCF tclear the flag
-     trig = 0;
-
-
+     setDigit(resultS[0]);
+         	
  }
 
  void LPTMR0Init(int count)
@@ -156,14 +158,25 @@ void PORTA_IRQHandler(void) {
      LPTMR0_CSR |= LPTMR_CSR_TEN_MASK;    // Turn ON LPTMR0 and start counting
  }
 
+ void Timer0Init(void)
+ {
+ 	TPM0_CNT = 0x0;
+ 	TPM0_MOD = 0x78;
+ 	TPM0_CnSC(0) = 0x28;
+ 	TPM0_SC = TPM_SC_CMOD(0);
+ 	TPM0_SC = (TPM_SC_CPWMS(0) | TPM_SC_PS(2) | TPM_SC_DMA(0) | TPM_SC_TOIE(0));
+ 	TPM0_SC = TPM_SC_CMOD(1);
+     // Dalsi ukoly k doplneni jsou uvedeny v hlavni smycce.
+ }
+
+
 int main(void) {
     MCUInit();
     PortsInit();
     LPTMR0Init(compare);
+    Timer0Init();
 
     while (1) {
-    	sensor();
-    	setDigit(resultS[0]);
     	PTD->PDOR |= GPIO_PDOR_PDO(LED_C1);
     	delay(DELAY_TIME);
     	PTD->PDOR &= GPIO_PDOR_PDO(~LED_C1);
@@ -182,7 +195,6 @@ int main(void) {
     	PTD->PDOR |= GPIO_PDOR_PDO(LED_C4);
     	delay(DELAY_TIME);
     	PTD->PDOR &= GPIO_PDOR_PDO(~LED_C4);
-    	delay(350000);
     }
 
     return 0;
