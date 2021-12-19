@@ -144,7 +144,7 @@ void PORTA_IRQHandler(void) {
     	 measurement += 10;
 
      }
-     result = round(measurement/29/2);
+     result = trunc(measurement/29/2);
      if (result < 0) result = 0;
      if (result > 9999) result = 9999;
      memset(resultS, 'x', 4);
@@ -154,7 +154,6 @@ void PORTA_IRQHandler(void) {
 int main(void) {
     MCUInit();
     PortsInit();
-//    LPTMR0Init(compare);
 
     while (1) {
     	sensor();
